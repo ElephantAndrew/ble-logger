@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Encoder Logger</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --fg: #1b1f24; --muted: #6b7280; --line: #e2e5ea;
+    --accent: #2563eb; --accent-fg: #ffffff; --rec: #dc2626; --ok: #15803d; --warn: #b45309;
+    --l: #2563eb; --r: #ea580c; --grid: #e9ecf0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --card: #1a1d23; --fg: #e8eaed; --muted: #9aa0a6; --line: #2c3038;
+      --accent: #60a5fa; --accent-fg: #0f1115; --rec: #f87171; --ok: #4ade80; --warn: #fbbf24;
+      --l: #60a5fa; --r: #fb923c; --grid: #262a31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+    padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  .status { font-size: 14px; color: var(--muted); }
+  .status.ok { color: var(--ok); } .status.warn { color: var(--warn); } .status.err { color: var(--rec); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    flex: 1 1 auto; min-height: 48px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); font-size: 16px; font-weight: 600; padding: 8px 12px;
+  }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.rec { background: var(--rec); color: #fff; border-color: var(--rec); }
+  button:disabled { opacity: .4; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .val { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; }
+  .lbl { font-size: 12px; color: var(--muted); }
+  .L { color: var(--l); } .R { color: var(--r); }
+  canvas { width: 100%; height: 180px; display: block; }
+  .recinfo { font-variant-numeric: tabular-nums; font-size: 15px; margin: 8px 0 0; }
+  textarea { width: 100%; height: 160px; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; }
+  .hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<h1>エンコーダ受信（YahBoom_BL）</h1>
+
+<div class="card">
+  <div id="status" class="status">「接続」を押して、一覧から YahBoom_BL を選んでください。</div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnConnect" class="primary">接続</button>
+    <button id="btnReconnect" disabled>再接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid">
+    <div><div class="lbl">累計 L</div><div id="totL" class="val L">–</div></div>
+    <div><div class="lbl">累計 R</div><div id="totR" class="val R">–</div></div>
+    <div><div class="lbl">速さ L [mm/s]</div><div id="vL" class="val L">–</div></div>
+    <div><div class="lbl">速さ R [mm/s]</div><div id="vR" class="val R">–</div></div>
+  </div>
+  <div class="hint">受信 <span id="nRx">0</span> 行 ／ 読めなかった行 <span id="nBad">0</span></div>
+</div>
+
+<div class="card">
+  <div class="lbl">左右の速さ（直近30秒）　<span class="L">■ L</span>　<span class="R">■ R</span></div>
+  <canvas id="plot"></canvas>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="btnRec" class="rec" disabled>記録開始</button>
+  </div>
+  <div id="recInfo" class="recinfo">記録なし</div>
+</div>
+
+<div class="card">
+  <div class="lbl">記録したデータを保存する</div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnShare" disabled>共有・ファイルに保存</button>
+    <button id="btnDownload" disabled>ダウンロード</button>
+    <button id="btnCopy" disabled>コピー</button>
+  </div>
+  <p class="hint">「共有・ファイルに保存」→「"ファイル"に保存」→ iCloud Drive を選ぶと、Windows のエクスプローラーの iCloud Drive に届きます。</p>
+  <textarea id="csvBox" class="hidden" readonly></textarea>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const SVC = 0xffe0;            // データ用サービス
+  const CHR = 0xffe1;            // 受信（Notify）
+  const PLOT_SEC = 30;
+  const STORE_KEY = "encoder_logger_last";
+
+  const $ = (id) => document.getElementById(id);
+  const ui = {
+    status: $("status"), connect: $("btnConnect"), reconnect: $("btnReconnect"), disconnect: $("btnDisconnect"),
+    totL: $("totL"), totR: $("totR"), vL: $("vL"), vR: $("vR"), nRx: $("nRx"), nBad: $("nBad"),
+    plot: $("plot"), rec: $("btnRec"), recInfo: $("recInfo"),
+    share: $("btnShare"), download: $("btnDownload"), copy: $("btnCopy"), csvBox: $("csvBox"),
+  };
+
+  let device = null, chr = null;
+  let decoder = new TextDecoder();
+  let buf = "";
+  let nRx = 0, nBad = 0;
+  let live = [];                 // {t, vL, vR}（グラフ用）
+  let recording = false;
+  let recStartPerf = 0, recStartWall = null;
+  let rows = [];                 // [rx_ms, t_ms, totalL, totalR, dL, dR, vL, vR]
+  let wakeLock = null;
+
+  function setStatus(text, cls) {
+    ui.status.textContent = text;
+    ui.status.className = "status" + (cls ? " " + cls : "");
+  }
+
+  // ---------- 受信 ----------
+  function parseLine(line) {
+    // t_ms,totalL,totalR,dL,dR,vL_mm_s,vR_mm_s
+    if (!line || line[0] === "#") return null;
+    const p = line.split(",");
+    if (p.length !== 7) return undefined;
+    const n = p.map((s) => Number(s.trim()));
+    if (n.some((x) => !Number.isFinite(x))) return undefined;
+    return n;
+  }
+
+  function onNotify(ev) {
+    const dv = ev.target.value;
+    buf += decoder.decode(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength), { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).replace(/\r/g, "").trim();
+      buf = buf.slice(i + 1);
+      handleLine(line);
+    }
+    if (buf.length > 1000) buf = "";   // 改行が来ないまま溜まり続けたら捨てる
+  }
+
+  function handleLine(line) {
+    const n = parseLine(line);
+    if (n === null) return;
+    if (n === undefined) { nBad++; ui.nBad.textContent = nBad; return; }
+    nRx++;
+    ui.nRx.textContent = nRx;
+    const [, totalL, totalR, , , vL, vR] = n;
+    ui.totL.textContent = totalL; ui.totR.textContent = totalR;
+    ui.vL.textContent = vL; ui.vR.textContent = vR;
+
+    const now = performance.now();
+    live.push({ t: now, vL, vR });
+    while (live.length && now - live[0].t > PLOT_SEC * 1000) live.shift();
+    schedulePlot();
+
+    if (recording) {
+      rows.push([Math.round(now - recStartPerf), ...n]);
+      updateRecInfo();
+    }
+  }
+
+  // ---------- 接続 ----------
+  async function connect() {
+    if (!navigator.bluetooth) {
+      setStatus("このブラウザは Web Bluetooth に対応していません。Bluefy で開いてください。", "err");
+      return;
+    }
+    try {
+      device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SVC] });
+      device.addEventListener("gattserverdisconnected", onDisconnected);
+      await connectGatt();
+    } catch (e) {
+      setStatus("接続できませんでした: " + (e && e.message ? e.message : e), "err");
+    }
+  }
+
+  async function connectGatt() {
+    if (!device) return;
+    setStatus("接続しています…");
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    const c = await svc.getCharacteristic(CHR);
+    if (chr) chr.removeEventListener("characteristicvaluechanged", onNotify);
+    chr = c;
+    chr.addEventListener("characteristicvaluechanged", onNotify);
+    await chr.startNotifications();
+    decoder = new TextDecoder(); buf = "";
+    setStatus("接続中: " + ((device.name || "").trim() || "（名前なし）"), "ok");
+    ui.reconnect.disabled = true; ui.disconnect.disabled = false; ui.rec.disabled = false;
+    keepAwake();
+  }
+
+  async function reconnect() {
+    try { await connectGatt(); }
+    catch (e) { setStatus("再接続できませんでした: " + (e && e.message ? e.message : e), "err"); }
+  }
+
+  function onDisconnected() {
+    setStatus(recording ? "切断されました（記録は続いています）。「再接続」を押してください。" : "切断されました。「再接続」を押してください。", "warn");
+    ui.reconnect.disabled = false; ui.disconnect.disabled = true;
+  }
+
+  function disconnect() {
+    if (device && device.gatt.connected) device.gatt.disconnect();
+  }
+
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (_) {}
+  }
+
+  // ---------- 記録 ----------
+  function toggleRec() {
+    if (!recording) {
+      if (rows.length && !confirm("前の記録（" + rows.length + " 行）を消して、新しく記録を始めますか？")) return;
+      rows = [];
+      recStartPerf = performance.now();
+      recStartWall = new Date();
+      recording = true;
+      ui.rec.textContent = "記録停止";
+      setExportEnabled(false);
+    } else {
+      recording = false;
+      ui.rec.textContent = "記録開始";
+      saveLocal();
+      setExportEnabled(rows.length > 0);
+    }
+    updateRecInfo();
+  }
+
+  function updateRecInfo() {
+    if (!rows.length && !recording) { ui.recInfo.textContent = "記録なし"; return; }
+    const sec = rows.length ? rows[rows.length - 1][0] / 1000 : 0;
+    ui.recInfo.textContent = (recording ? "● 記録中　" : "記録済み　") + rows.length + " 行（" + sec.toFixed(1) + " 秒）";
+  }
+
+  function setExportEnabled(on) {
+    ui.share.disabled = ui.download.disabled = ui.copy.disabled = !on;
+  }
+
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function fileName() {
+    const d = recStartWall || new Date();
+    return "encoder_" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "_" +
+      pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + ".csv";
+  }
+  function csvText() {
+    return "rx_ms,t_ms,totalL,totalR,dL,dR,vL_mm_s,vR_mm_s\n" + rows.map((r) => r.join(",")).join("\n") + "\n";
+  }
+
+  async function shareCsv() {
+    const text = csvText();
+    try {
+      const file = new File([text], fileName(), { type: "text/csv" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: fileName() });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;   // 共有画面を閉じただけ
+    }
+    alert("このブラウザでは共有が使えません。「ダウンロード」か「コピー」を使ってください。");
+  }
+
+  function downloadCsv() {
+    const url = URL.createObjectURL(new Blob([csvText()], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = fileName();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  async function copyCsv() {
+    const text = csvText();
+    ui.csvBox.value = text;
+    ui.csvBox.classList.remove("hidden");
+    try {
+      await navigator.clipboard.writeText(text);
+      alert(rows.length + " 行をコピーしました。メモやメールに貼り付けてください。");
+    } catch (_) {
+      ui.csvBox.focus(); ui.csvBox.select();
+      alert("下の枠の文字を長押しして「すべてを選択」→「コピー」してください。");
+    }
+  }
+
+  // ---------- 端末内の保存（ページを閉じても最後の記録が残る） ----------
+  function saveLocal() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ start: recStartWall ? recStartWall.toISOString() : null, rows }));
+    } catch (_) {}
+  }
+  function loadLocal() {
+    try {
+      const s = localStorage.getItem(STORE_KEY);
+      if (!s) return;
+      const o = JSON.parse(s);
+      if (o && Array.isArray(o.rows) && o.rows.length) {
+        rows = o.rows; recStartWall = o.start ? new Date(o.start) : null;
+        setExportEnabled(true);
+        updateRecInfo();
+        ui.recInfo.textContent += "（前回の記録）";
+      }
+    } catch (_) {}
+  }
+  setInterval(() => { if (recording) saveLocal(); }, 3000);
+
+  // ---------- グラフ ----------
+  let plotPending = false;
+  function schedulePlot() {
+    if (plotPending) return;
+    plotPending = true;
+    requestAnimationFrame(() => { plotPending = false; drawPlot(); });
+  }
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function drawPlot() {
+    const cv = ui.plot, dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    let m = 50;
+    for (const p of live) m = Math.max(m, Math.abs(p.vL), Math.abs(p.vR));
+    m = Math.ceil(m / 50) * 50;
+    const y = (v) => h / 2 - (v / m) * (h / 2 - 12);
+    const now = live.length ? live[live.length - 1].t : 0;
+    const x = (t) => w - ((now - t) / (PLOT_SEC * 1000)) * w;
+    g.strokeStyle = cssVar("--grid"); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w, y(0)); g.stroke();
+    g.fillStyle = cssVar("--muted"); g.font = "11px sans-serif";
+    g.fillText("+" + m, 4, 12); g.fillText("-" + m, 4, h - 4); g.fillText("0", 4, y(0) - 3);
+    for (const [key, col] of [["vL", "--l"], ["vR", "--r"]]) {
+      g.strokeStyle = cssVar(col); g.lineWidth = 2; g.beginPath();
+      live.forEach((p, i) => { const px = x(p.t), py = y(p[key]); i ? g.lineTo(px, py) : g.moveTo(px, py); });
+      g.stroke();
+    }
+  }
+  window.addEventListener("resize", schedulePlot);
+
+  // ---------- ボタン ----------
+  ui.connect.addEventListener("click", connect);
+  ui.reconnect.addEventListener("click", reconnect);
+  ui.disconnect.addEventListener("click", disconnect);
+  ui.rec.addEventListener("click", toggleRec);
+  ui.share.addEventListener("click", shareCsv);
+  ui.download.addEventListener("click", downloadCsv);
+  ui.copy.addEventListener("click", copyCsv);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && wakeLock === null) keepAwake(); });
+
+  loadLocal();
+  drawPlot();
+  if (!navigator.bluetooth) setStatus("このブラウザは Web Bluetooth に対応していません。iPhone では Bluefy で開いてください。", "warn");
+
+  // テスト用（受信処理だけを外から呼べるようにする）
+  window.__encoderLogger = { onNotify, parseLine, csvText: () => csvText(), toggleRec, rows: () => rows };
+})();
+</script>
+</body>
+</html>
