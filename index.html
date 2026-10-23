@@ -47,7 +47,7 @@
 </style>
 </head>
 <body>
-<h1>エンコーダ受信（YahBoom_BL）</h1>
+<h1>エンコーダ受信（YahBoom_BL）<span style="font-size:12px;font-weight:400;color:var(--muted)">　v2</span></h1>
 
 <div class="card">
   <div id="status" class="status">「接続」を押して、一覧から YahBoom_BL を選んでください。</div>
@@ -94,8 +94,9 @@
 <script>
 (() => {
   "use strict";
-  const SVC = 0xffe0;            // データ用サービス
-  const CHR = 0xffe1;            // 受信（Notify）
+  // Bluefy は数値の UUID を受け付けないことがあるので、128ビットの文字列で書く
+  const SVC = "0000ffe0-0000-1000-8000-00805f9b34fb";   // データ用サービス
+  const CHR = "0000ffe1-0000-1000-8000-00805f9b34fb";   // 受信（Notify）
   const PLOT_SEC = 30;
   const STORE_KEY = "encoder_logger_last";
 
@@ -121,6 +122,20 @@
     ui.status.textContent = text;
     ui.status.className = "status" + (cls ? " " + cls : "");
   }
+
+  // エラーの中身を、種類に関係なく文字にする
+  function errText(e) {
+    if (e === undefined || e === null) return String(e);
+    if (typeof e !== "object") return String(e);
+    const parts = [];
+    if (e.name) parts.push(e.name);
+    if (e.message) parts.push(e.message);
+    if (e.code !== undefined) parts.push("code=" + e.code);
+    if (parts.length) return parts.join(" / ");
+    try { return JSON.stringify(e); } catch (_) { return String(e); }
+  }
+
+  let stage = "";   // どの段階で止まったかを表示するため
 
   // ---------- 受信 ----------
   function parseLine(line) {
@@ -173,23 +188,30 @@
       return;
     }
     try {
+      stage = "機器の選択";
+      setStatus("一覧から YahBoom_BL を選んでください…");
       device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SVC] });
       device.addEventListener("gattserverdisconnected", onDisconnected);
       await connectGatt();
     } catch (e) {
-      setStatus("接続できませんでした: " + (e && e.message ? e.message : e), "err");
+      setStatus("接続できませんでした（" + stage + "の段階）: " + errText(e), "err");
     }
   }
 
   async function connectGatt() {
     if (!device) return;
+    stage = "接続";
     setStatus("接続しています…");
     const server = await device.gatt.connect();
+    stage = "サービス取得";
+    setStatus("サービス（FFE0）を探しています…");
     const svc = await server.getPrimaryService(SVC);
+    stage = "キャラクタリスティック取得";
     const c = await svc.getCharacteristic(CHR);
     if (chr) chr.removeEventListener("characteristicvaluechanged", onNotify);
     chr = c;
     chr.addEventListener("characteristicvaluechanged", onNotify);
+    stage = "通知の開始";
     await chr.startNotifications();
     decoder = new TextDecoder(); buf = "";
     setStatus("接続中: " + ((device.name || "").trim() || "（名前なし）"), "ok");
@@ -199,7 +221,7 @@
 
   async function reconnect() {
     try { await connectGatt(); }
-    catch (e) { setStatus("再接続できませんでした: " + (e && e.message ? e.message : e), "err"); }
+    catch (e) { setStatus("再接続できませんでした（" + stage + "の段階）: " + errText(e), "err"); }
   }
 
   function onDisconnected() {
