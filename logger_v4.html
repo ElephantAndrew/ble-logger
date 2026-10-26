@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Encoder Logger v4</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --fg: #1b1f24; --muted: #6b7280; --line: #e2e5ea;
+    --accent: #2563eb; --accent-fg: #ffffff; --rec: #dc2626; --ok: #15803d; --warn: #b45309;
+    --l: #2563eb; --r: #ea580c; --grid: #e9ecf0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --card: #1a1d23; --fg: #e8eaed; --muted: #9aa0a6; --line: #2c3038;
+      --accent: #60a5fa; --accent-fg: #0f1115; --rec: #f87171; --ok: #4ade80; --warn: #fbbf24;
+      --l: #60a5fa; --r: #fb923c; --grid: #262a31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif;
+    padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  .status { font-size: 14px; color: var(--muted); }
+  .status.ok { color: var(--ok); } .status.warn { color: var(--warn); } .status.err { color: var(--rec); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button, .filebtn {
+    flex: 1 1 auto; min-height: 48px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); font-size: 16px; font-weight: 600; padding: 8px 12px;
+    font-family: inherit;
+  }
+  .filebtn { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.rec { background: var(--rec); color: #fff; border-color: var(--rec); }
+  button:disabled { opacity: .4; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .val { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 700; }
+  .lbl { font-size: 12px; color: var(--muted); }
+  .L { color: var(--l); } .R { color: var(--r); }
+  canvas { width: 100%; height: 180px; display: block; }
+  .recinfo { font-variant-numeric: tabular-nums; font-size: 15px; margin: 8px 0 0; overflow-wrap: anywhere; }
+  textarea { width: 100%; height: 160px; font: 12px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; }
+  .hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  .hint.on { color: var(--ok); } .hint.warn { color: var(--warn); } .hint.err { color: var(--rec); }
+  .hidden { display: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+  /* 保存形式の切り替え */
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 8px; }
+  .seg label { flex: 1; position: relative; cursor: pointer; }
+  .seg label + label span { border-left: 1px solid var(--line); }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 6px 8px; font-size: 15px; font-weight: 600; text-align: center; }
+  .seg input:checked + span { background: var(--accent); color: var(--accent-fg); }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -3px; }
+  /* パラメータ */
+  .pgroup { font-size: 13px; font-weight: 700; color: var(--muted); margin: 12px 0 2px; }
+  .prow { display: grid; grid-template-columns: 1fr 44px 80px 44px; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+  .pname { font-size: 15px; line-height: 1.3; min-width: 0; }
+  .probot { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .probot.same { color: var(--ok); } .probot.diff { color: var(--warn); } .probot.err { color: var(--rec); }
+  button.pbtn { flex: none; min-height: 44px; padding: 0; font-size: 22px; font-weight: 500; line-height: 1; }
+  .pin {
+    width: 100%; height: 44px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+    font: 600 17px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+<h1>エンコーダ受信（YahBoom_BL）<span style="font-size:12px;font-weight:400;color:var(--muted)">　v4</span></h1>
+
+<div class="card">
+  <div id="status" class="status">「接続」を押して、一覧から YahBoom_BL を選んでください。</div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnConnect" class="primary">接続</button>
+    <button id="btnReconnect" disabled>再接続</button>
+    <button id="btnDisconnect" disabled>切断</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid">
+    <div><div class="lbl">累計 L</div><div id="totL" class="val L">–</div></div>
+    <div><div class="lbl">累計 R</div><div id="totR" class="val R">–</div></div>
+    <div><div class="lbl">速さ L [mm/s]</div><div id="vL" class="val L">–</div></div>
+    <div><div class="lbl">速さ R [mm/s]</div><div id="vR" class="val R">–</div></div>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnZero">累計 L・R を 0 にする</button>
+  </div>
+  <div id="zeroInfo" class="hint">累計はロボットから届いた値そのままです。</div>
+  <div class="hint">受信 <span id="nRx">0</span> 行 ／ 読めなかった行 <span id="nBad">0</span></div>
+</div>
+
+<div class="card">
+  <div class="lbl">左右の速さ（直近30秒）　<span class="L">■ L</span>　<span class="R">■ R</span></div>
+  <canvas id="plot"></canvas>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="btnRec" class="rec" disabled>記録開始</button>
+  </div>
+  <div id="recInfo" class="recinfo">記録なし</div>
+</div>
+
+<div class="card">
+  <div class="lbl">パラメータ（Bluetooth でロボットへ送る）</div>
+  <div id="paramList"></div>
+  <div class="row" style="margin-top:10px">
+    <button id="btnPRead" disabled>ロボットの値を読む</button>
+    <button id="btnPSendAll" disabled>全部送る</button>
+    <button id="btnPDefault" disabled>初期値に戻す</button>
+  </div>
+  <div id="paramStatus" class="hint">接続すると、ロボットの今の値を読み込みます。</div>
+  <p class="hint">−・＋ や入力欄で変えた値は、すぐロボットへ送ります。ロボットが受け取ると、名前の下の「ロボット」の値が同じになります（緑）。ロボットの電源を切ると初期値に戻るので、そのときは「全部送る」で送り直してください。</p>
+</div>
+
+<div class="card">
+  <div class="lbl">記録したデータを保存する</div>
+  <div class="seg" role="radiogroup" aria-label="保存する形式">
+    <label><input type="radio" name="fmt" value="xlsx" checked><span>Excel（グラフ付き）</span></label>
+    <label><input type="radio" name="fmt" value="csv"><span>CSV</span></label>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button id="btnShare" disabled>共有・ファイルに保存</button>
+    <button id="btnDownload" disabled>ダウンロード</button>
+    <button id="btnCopy" disabled>CSVをコピー</button>
+  </div>
+  <p class="hint">Excel を選ぶと、データの表の横に「エンコーダデータ」のグラフ（totalL・totalR・dL・dR）が入ったファイルになります。</p>
+  <p class="hint">「共有・ファイルに保存」→「"ファイル"に保存」→ iCloud Drive を選ぶと、Windows のエクスプローラーの iCloud Drive に届きます。</p>
+  <textarea id="csvBox" class="hidden" readonly></textarea>
+</div>
+
+<div class="card">
+  <div class="lbl">前に保存した CSV をグラフ付き Excel にする</div>
+  <div class="row" style="margin-top:8px">
+    <label for="fileCsv" class="filebtn">CSV を読み込む</label>
+    <input id="fileCsv" class="sr-only" type="file" accept=".csv,text/csv,text/plain">
+  </div>
+  <p class="hint">読み込むと上の「記録」の代わりになり、「Excel（グラフ付き）」で保存できます。PC の受信スクリプトの CSV も読めます。</p>
+</div>
+
+<script>
+// ---------- グラフ付き Excel（.xlsx）を作る ----------
+// ライブラリを使わず、Excel の中身（XML）を書いて ZIP にまとめる
+window.EncoderXlsx = (() => {
+  "use strict";
+  const REC_HEADER = ["rx_ms", "t_ms", "totalL", "totalR", "dL", "dR", "vL_mm_s", "vR_mm_s"];   // このページの記録
+  const ROBOT_HEADER = ["t_ms", "totalL", "totalR", "dL", "dR", "vL_mm_s", "vR_mm_s"];           // ロボットが送る行
+  // 添付のグラフと同じ色（Excel 標準の配色で C〜F 列に当たる色）
+  const SERIES = [
+    { name: "totalL", color: "A5A5A5" },
+    { name: "totalR", color: "FFC000" },
+    { name: "dL", color: "5B9BD5" },
+    { name: "dR", color: "70AD47" },
+  ];
+  const NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+  const NS_C = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+  const NS_XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+  const NS_PR = "http://schemas.openxmlformats.org/package/2006/relationships";
+  const RT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+  const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  const TXT = "595959", LINE = "D9D9D9";
+  const enc = new TextEncoder();
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+  function colName(i) {           // 0 → A, 25 → Z, 26 → AA
+    let s = "";
+    for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
+    return s;
+  }
+
+  // グラフにする列（見出しの名前で探す。大文字小文字は区別しない）
+  function seriesCols(header) {
+    const low = header.map((h) => String(h).trim().toLowerCase());
+    return SERIES.map((s) => ({ ...s, col: low.indexOf(s.name.toLowerCase()) })).filter((s) => s.col >= 0);
+  }
+
+  // ---------- ZIP（無圧縮） ----------
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(b) {
+    let c = 0xffffffff;
+    for (let i = 0; i < b.length; i++) c = CRC_TABLE[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function zip(files, d) {
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const date = ((Math.max(d.getFullYear(), 1980) - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    const parts = [], central = [];
+    let off = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), data = enc.encode(f.data), crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true);
+      h.setUint16(10, time, true); h.setUint16(12, date, true); h.setUint32(14, crc, true);
+      h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true);
+      parts.push(new Uint8Array(h.buffer), name, data);
+      const c = new DataView(new ArrayBuffer(46));
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true);
+      c.setUint16(12, time, true); c.setUint16(14, date, true); c.setUint32(16, crc, true);
+      c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true);
+      c.setUint32(42, off, true);
+      central.push(new Uint8Array(c.buffer), name);
+      off += 30 + name.length + data.length;
+    }
+    let cdSize = 0;
+    for (const p of central) cdSize += p.length;
+    const e = new DataView(new ArrayBuffer(22));
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, cdSize, true); e.setUint32(16, off, true);
+    const all = parts.concat(central, [new Uint8Array(e.buffer)]);
+    let total = 0;
+    for (const p of all) total += p.length;
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const p of all) { out.set(p, pos); pos += p.length; }
+    return out;
+  }
+
+  // ---------- 表（シート） ----------
+  function sheetXml(header, rows, nCol, withDrawing) {
+    const o = [HEAD, '<worksheet xmlns="', NS_MAIN, '" xmlns:r="', NS_R, '">',
+      '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
+      '<sheetFormatPr defaultRowHeight="15"/>',
+      '<cols><col min="1" max="', nCol, '" width="10.5" customWidth="1"/></cols>',
+      '<sheetData><row r="1">'];
+    header.forEach((h, i) => o.push('<c r="', colName(i), '1" s="1" t="inlineStr"><is><t>', esc(h), "</t></is></c>"));
+    o.push("</row>");
+    for (let j = 0; j < rows.length; j++) {
+      const r = rows[j], rn = j + 2;
+      o.push('<row r="', rn, '">');
+      for (let i = 0; i < r.length; i++) {
+        const v = r[i];
+        if (isNum(v)) o.push('<c r="', colName(i), rn, '"><v>', v, "</v></c>");
+        else if (v !== null && v !== undefined && v !== "") o.push('<c r="', colName(i), rn, '" t="inlineStr"><is><t>', esc(v), "</t></is></c>");
+      }
+      o.push("</row>");
+    }
+    o.push('</sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>',
+      withDrawing ? '<drawing r:id="rId1"/>' : "", "</worksheet>");
+    return o.join("");
+  }
+
+  // ---------- グラフ ----------
+  const solid = (c) => '<a:solidFill><a:srgbClr val="' + c + '"/></a:solidFill>';
+  const thinLine = '<a:ln w="9525" cap="flat" cmpd="sng" algn="ctr">' + solid(LINE) + "<a:round/></a:ln>";
+  const noBox = "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>";
+  const txPr = (sz) => '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="' + sz + '" b="0">' + solid(TXT) +
+    '</a:defRPr></a:pPr><a:endParaRPr lang="ja-JP"/></a:p></c:txPr>';
+
+  function chartXml(sheetRef, header, rows, series, title) {
+    const n = rows.length, last = n + 1;
+    const o = [HEAD, '<c:chartSpace xmlns:c="', NS_C, '" xmlns:a="', NS_A, '" xmlns:r="', NS_R, '">',
+      '<c:date1904 val="0"/><c:lang val="ja-JP"/><c:roundedCorners val="0"/><c:chart>',
+      '<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="0">', solid(TXT), "</a:defRPr></a:pPr>",
+      '<a:r><a:rPr lang="ja-JP" altLang="en-US" sz="1400" b="0">', solid(TXT), "</a:rPr><a:t>", esc(title), "</a:t></a:r></a:p></c:rich></c:tx>",
+      '<c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>',
+      '<c:plotArea><c:layout/><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>'];
+    series.forEach((s, k) => {
+      const L = colName(s.col);
+      o.push('<c:ser><c:idx val="', k, '"/><c:order val="', k, '"/>',
+        "<c:tx><c:strRef><c:f>", esc(sheetRef + "!$" + L + "$1"), '</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>',
+        esc(header[s.col]), "</c:v></c:pt></c:strCache></c:strRef></c:tx>",
+        '<c:spPr><a:ln w="28575" cap="rnd">', solid(s.color), "<a:round/></a:ln></c:spPr>",
+        '<c:marker><c:symbol val="none"/></c:marker>',
+        "<c:val><c:numRef><c:f>", esc(sheetRef + "!$" + L + "$2:$" + L + "$" + last), "</c:f>",
+        '<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="', n, '"/>');
+      for (let j = 0; j < n; j++) {
+        const v = rows[j][s.col];
+        if (isNum(v)) o.push('<c:pt idx="', j, '"><c:v>', v, "</c:v></c:pt>");
+      }
+      o.push('</c:numCache></c:numRef></c:val><c:smooth val="0"/></c:ser>');
+    });
+    o.push('<c:marker val="1"/><c:axId val="500000001"/><c:axId val="500000002"/></c:lineChart>',
+      // 横軸（行の番号 1, 2, 3 …）。目盛りの数字はグラフの下に出す
+      '<c:catAx><c:axId val="500000001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>',
+      '<c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/>',
+      '<c:tickLblPos val="low"/><c:spPr><a:noFill/>', thinLine, "</c:spPr>", txPr(900),
+      '<c:crossAx val="500000002"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/>',
+      '<c:noMultiLvlLbl val="0"/></c:catAx>',
+      // 縦軸
+      '<c:valAx><c:axId val="500000002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>',
+      '<c:axPos val="l"/><c:majorGridlines><c:spPr>', thinLine, "</c:spPr></c:majorGridlines>",
+      '<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/>',
+      '<c:tickLblPos val="nextTo"/>', noBox, txPr(900),
+      '<c:crossAx val="500000001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>',
+      noBox, "</c:plotArea>",
+      '<c:legend><c:legendPos val="b"/><c:overlay val="0"/>', noBox, txPr(1200), "</c:legend>",
+      '<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart>',
+      "<c:spPr>", solid("FFFFFF"), thinLine, "</c:spPr>", txPr(1000), "</c:chartSpace>");
+    return o.join("");
+  }
+
+  function drawingXml(col) {
+    // 表の右（1列あけた所）の2行目に、幅 18 cm × 高さ 10.5 cm で置く
+    return HEAD + '<xdr:wsDr xmlns:xdr="' + NS_XDR + '" xmlns:a="' + NS_A + '"><xdr:oneCellAnchor>' +
+      "<xdr:from><xdr:col>" + col + "</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>" +
+      '<xdr:ext cx="6480000" cy="3780000"/><xdr:graphicFrame macro="">' +
+      '<xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="グラフ 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>' +
+      '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
+      '<c:chart xmlns:c="' + NS_C + '" xmlns:r="' + NS_R + '" r:id="rId1"/></a:graphicData></a:graphic>' +
+      "</xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>";
+  }
+
+  const rels = (list) => HEAD + '<Relationships xmlns="' + NS_PR + '">' +
+    list.map(([id, type, target]) => '<Relationship Id="' + id + '" Type="' + type + '" Target="' + target + '"/>').join("") + "</Relationships>";
+
+  // header: 見出しの配列、rows: 行の配列（数値。空欄は null）
+  // extra: グラフなしで後ろに足すシート [{ name, header, rows }]（パラメータの記録など）
+  function build({ header, rows, sheetName = "データ", title = "エンコーダデータ", date = new Date(), extra = [] }) {
+    if (!rows || !rows.length) throw new Error("データがありません");
+    const series = seriesCols(header);
+    if (!series.length) throw new Error("グラフにする列（totalL・totalR・dL・dR）が見つかりません");
+    let nCol = header.length;
+    for (const r of rows) if (r.length > nCol) nCol = r.length;
+    const sheetRef = "'" + sheetName.replace(/'/g, "''") + "'";
+    const CT = "application/vnd.openxmlformats-officedocument.";
+    const more = (extra || []).filter((s) => s && s.header && s.header.length);
+    const sheetList = [{ name: sheetName }].concat(more);
+    const files = [
+      { name: "[Content_Types].xml", data: HEAD +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="' + CT + 'spreadsheetml.sheet.main+xml"/>' +
+        sheetList.map((_, i) => '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="' + CT + 'spreadsheetml.worksheet+xml"/>').join("") +
+        '<Override PartName="/xl/styles.xml" ContentType="' + CT + 'spreadsheetml.styles+xml"/>' +
+        '<Override PartName="/xl/drawings/drawing1.xml" ContentType="' + CT + 'drawing+xml"/>' +
+        '<Override PartName="/xl/charts/chart1.xml" ContentType="' + CT + 'drawingml.chart+xml"/>' +
+        "</Types>" },
+      { name: "_rels/.rels", data: rels([["rId1", RT + "officeDocument", "xl/workbook.xml"]]) },
+      { name: "xl/workbook.xml", data: HEAD + '<workbook xmlns="' + NS_MAIN + '" xmlns:r="' + NS_R + '">' +
+        "<bookViews><workbookView/></bookViews><sheets>" +
+        sheetList.map((s, i) => '<sheet name="' + esc(s.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join("") +
+        "</sheets></workbook>" },
+      { name: "xl/_rels/workbook.xml.rels", data: rels(sheetList.map((_, i) => ["rId" + (i + 1), RT + "worksheet", "worksheets/sheet" + (i + 1) + ".xml"])
+        .concat([["rId" + (sheetList.length + 1), RT + "styles", "styles.xml"]])) },
+      { name: "xl/styles.xml", data: HEAD + '<styleSheet xmlns="' + NS_MAIN + '">' +
+        '<fonts count="2"><font><sz val="11"/><name val="Calibri"/><family val="2"/></font>' +
+        '<font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font></fonts>' +
+        '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+        '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+        '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>' +
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>' },
+      { name: "xl/worksheets/sheet1.xml", data: sheetXml(header, rows, nCol, true) },
+      { name: "xl/worksheets/_rels/sheet1.xml.rels", data: rels([["rId1", RT + "drawing", "../drawings/drawing1.xml"]]) },
+      { name: "xl/drawings/drawing1.xml", data: drawingXml(nCol + 1) },
+      { name: "xl/drawings/_rels/drawing1.xml.rels", data: rels([["rId1", RT + "chart", "../charts/chart1.xml"]]) },
+      { name: "xl/charts/chart1.xml", data: chartXml(sheetRef, header, rows, series, title) },
+    ];
+    more.forEach((s, i) => {
+      let n = s.header.length;
+      for (const r of s.rows) if (r.length > n) n = r.length;
+      files.push({ name: "xl/worksheets/sheet" + (i + 2) + ".xml", data: sheetXml(s.header, s.rows, n, false) });
+    });
+    return zip(files, date);
+  }
+
+  // ---------- CSV を読む ----------
+  function parseCsv(text) {
+    const lines = String(text).replace(/^﻿/, "").split(/\r\n|\n|\r/)
+      .map((s) => s.trim()).filter((s) => s && s[0] !== "#");
+    if (!lines.length) throw new Error("中身が空です");
+    const split = (s) => s.split(/[,\t]/).map((t) => t.trim().replace(/^"(.*)"$/, "$1").trim());
+    const toVal = (t) => { if (t === "") return null; const x = Number(t); return Number.isFinite(x) ? x : t; };
+    const first = split(lines[0]);
+    let header, start;
+    if (first.some((t) => t !== "" && !Number.isFinite(Number(t)))) { header = first; start = 1; }
+    else if (first.length === REC_HEADER.length) { header = REC_HEADER.slice(); start = 0; }
+    else if (first.length === ROBOT_HEADER.length) { header = ROBOT_HEADER.slice(); start = 0; }
+    else throw new Error("見出しの行がなく、列の数（" + first.length + "）からも形式が分かりません");
+    const rows = [];
+    for (let i = start; i < lines.length; i++) rows.push(split(lines[i]).map(toVal));
+    if (!rows.length) throw new Error("データの行がありません");
+    return { header, rows };
+  }
+
+  return { build, parseCsv, seriesCols, REC_HEADER, ROBOT_HEADER, MIME: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
+})();
+</script>
+
+<script>
+(() => {
+  "use strict";
+  // Bluefy は数値の UUID を受け付けないことがあるので、128ビットの文字列で書く
+  const SVC = "0000ffe0-0000-1000-8000-00805f9b34fb";   // データ用サービス
+  const CHR = "0000ffe1-0000-1000-8000-00805f9b34fb";   // 受信（Notify）
+  const PLOT_SEC = 30;
+  const STORE_KEY = "encoder_logger_v4_last";   // 前のページ（index.html）の記録と混ざらないように別の名前
+  const X = window.EncoderXlsx;
+
+  const $ = (id) => document.getElementById(id);
+  const ui = {
+    status: $("status"), connect: $("btnConnect"), reconnect: $("btnReconnect"), disconnect: $("btnDisconnect"),
+    totL: $("totL"), totR: $("totR"), vL: $("vL"), vR: $("vR"), nRx: $("nRx"), nBad: $("nBad"),
+    zero: $("btnZero"), zeroInfo: $("zeroInfo"),
+    plot: $("plot"), rec: $("btnRec"), recInfo: $("recInfo"),
+    share: $("btnShare"), download: $("btnDownload"), copy: $("btnCopy"), csvBox: $("csvBox"),
+    file: $("fileCsv"),
+    paramList: $("paramList"), pRead: $("btnPRead"), pSendAll: $("btnPSendAll"), pDefault: $("btnPDefault"), pStatus: $("paramStatus"),
+  };
+
+  let device = null, chr = null;
+  let decoder = new TextDecoder();
+  let buf = "";
+  let nRx = 0, nBad = 0;
+  let live = [];                 // {t, vL, vR}（グラフ用）
+  let recording = false;
+  let recStartPerf = 0, recStartWall = null;
+  let header = X.REC_HEADER.slice();
+  let rows = [];                 // [rx_ms, t_ms, totalL, totalR, dL, dR, vL, vR]（読み込んだ CSV のときはその列）
+  let importedName = null;       // CSV を読み込んだときのファイル名
+  let wakeLock = null;
+  // 累計を 0 にする: ロボットの値から、押したときの値を引いて表示・記録する
+  let lastRaw = null;            // 最後に届いた累計（ロボットの値そのまま）[L, R]
+  let zero = [0, 0];
+  let zeroPending = false;       // まだ何も届いていないときに押した → 次に届いた値を 0 にする
+
+  function setStatus(text, cls) {
+    ui.status.textContent = text;
+    ui.status.className = "status" + (cls ? " " + cls : "");
+  }
+
+  // エラーの中身を、種類に関係なく文字にする
+  function errText(e) {
+    if (e === undefined || e === null) return String(e);
+    if (typeof e !== "object") return String(e);
+    const parts = [];
+    if (e.name && e.name !== "Error") parts.push(e.name);
+    if (e.message) parts.push(e.message);
+    if (e.code !== undefined) parts.push("code=" + e.code);
+    if (parts.length) return parts.join(" / ");
+    try { return JSON.stringify(e); } catch (_) { return String(e); }
+  }
+
+  let stage = "";   // どの段階で止まったかを表示するため
+
+  // ---------- 受信 ----------
+  function parseLine(line) {
+    // t_ms,totalL,totalR,dL,dR,vL_mm_s,vR_mm_s
+    if (!line || line[0] === "#") return null;
+    const p = line.split(",");
+    if (p.length !== 7) return undefined;
+    const n = p.map((s) => Number(s.trim()));
+    if (n.some((x) => !Number.isFinite(x))) return undefined;
+    return n;
+  }
+
+  function onNotify(ev) {
+    const dv = ev.target.value;
+    buf += decoder.decode(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength), { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).replace(/\r/g, "").trim();
+      buf = buf.slice(i + 1);
+      handleLine(line);
+    }
+    if (buf.length > 1000) buf = "";   // 改行が来ないまま溜まり続けたら捨てる
+  }
+
+  function handleLine(line) {
+    if (line.startsWith("#P") || line.startsWith("#E")) { handleParamReply(line); return; }
+    const n = parseLine(line);
+    if (n === null) return;
+    if (n === undefined) { nBad++; ui.nBad.textContent = nBad; return; }
+    nRx++;
+    ui.nRx.textContent = nRx;
+
+    lastRaw = [n[1], n[2]];
+    if (zeroPending) { zero = lastRaw.slice(); zeroPending = false; }
+    n[1] -= zero[0];
+    n[2] -= zero[1];
+
+    const [, totalL, totalR, , , vL, vR] = n;
+    ui.totL.textContent = totalL; ui.totR.textContent = totalR;
+    ui.vL.textContent = vL; ui.vR.textContent = vR;
+
+    const now = performance.now();
+    live.push({ t: now, vL, vR });
+    while (live.length && now - live[0].t > PLOT_SEC * 1000) live.shift();
+    schedulePlot();
+
+    if (recording) {
+      rows.push([Math.round(now - recStartPerf), ...n]);
+      updateRecInfo();
+    }
+  }
+
+  function resetTotals() {
+    if (lastRaw) { zero = lastRaw.slice(); zeroPending = false; }
+    else zeroPending = true;
+    ui.totL.textContent = "0"; ui.totR.textContent = "0";
+    ui.zeroInfo.textContent = "0 にした時点からの累計を表示・記録しています（" + clock(new Date()) + " に 0 にしました）。";
+    ui.zeroInfo.className = "hint on";
+  }
+
+  // ---------- 接続 ----------
+  async function connect() {
+    if (!navigator.bluetooth) {
+      setStatus("このブラウザは Web Bluetooth に対応していません。Bluefy で開いてください。", "err");
+      return;
+    }
+    try {
+      stage = "機器の選択";
+      setStatus("一覧から YahBoom_BL を選んでください…");
+      device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SVC] });
+      device.addEventListener("gattserverdisconnected", onDisconnected);
+      await connectGatt();
+    } catch (e) {
+      setStatus("接続できませんでした（" + stage + "の段階）: " + errText(e), "err");
+    }
+  }
+
+  async function connectGatt() {
+    if (!device) return;
+    stage = "接続";
+    setStatus("接続しています…");
+    const server = await device.gatt.connect();
+    stage = "サービス取得";
+    setStatus("サービス（FFE0）を探しています…");
+    const svc = await server.getPrimaryService(SVC);
+    stage = "キャラクタリスティック取得";
+    const c = await svc.getCharacteristic(CHR);
+    if (chr) chr.removeEventListener("characteristicvaluechanged", onNotify);
+    chr = c;
+    chr.addEventListener("characteristicvaluechanged", onNotify);
+    stage = "通知の開始";
+    await chr.startNotifications();
+    decoder = new TextDecoder(); buf = "";
+    setStatus("接続中: " + ((device.name || "").trim() || "（名前なし）"), "ok");
+    ui.reconnect.disabled = true; ui.disconnect.disabled = false; ui.rec.disabled = false;
+    setParamButtons(true);
+    readParams();
+    keepAwake();
+  }
+
+  async function reconnect() {
+    try { await connectGatt(); }
+    catch (e) { setStatus("再接続できませんでした（" + stage + "の段階）: " + errText(e), "err"); }
+  }
+
+  function onDisconnected() {
+    setStatus(recording ? "切断されました（記録は続いています）。「再接続」を押してください。" : "切断されました。「再接続」を押してください。", "warn");
+    ui.reconnect.disabled = false; ui.disconnect.disabled = true;
+    setParamButtons(false);
+  }
+
+  function disconnect() {
+    if (device && device.gatt.connected) device.gatt.disconnect();
+  }
+
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (_) {}
+  }
+
+  // ---------- 記録 ----------
+  function toggleRec() {
+    if (!recording) {
+      if (rows.length && !importedName && !confirm("前の記録（" + rows.length + " 行）を消して、新しく記録を始めますか？")) return;
+      header = X.REC_HEADER.slice();
+      importedName = null;
+      rows = [];
+      recStartPerf = performance.now();
+      recStartWall = new Date();
+      recording = true;
+      // 記録を始めた時点のロボットのパラメータを残す（途中で変えたものは届いたときに足す）
+      paramLog = PARAMS.filter((p) => robotVal[p.key] !== undefined).map((p) => [0, p.key, p.label, robotVal[p.key], "開始時"]);
+      ui.rec.textContent = "記録停止";
+      setExportEnabled(false);
+    } else {
+      recording = false;
+      ui.rec.textContent = "記録開始";
+      saveLocal();
+      setExportEnabled(rows.length > 0);
+    }
+    updateRecInfo();
+  }
+
+  function updateRecInfo() {
+    if (importedName) { ui.recInfo.textContent = "読み込んだ CSV　" + importedName + "　" + rows.length + " 行"; return; }
+    if (!rows.length && !recording) { ui.recInfo.textContent = "記録なし"; return; }
+    const sec = rows.length ? rows[rows.length - 1][0] / 1000 : 0;
+    ui.recInfo.textContent = (recording ? "● 記録中　" : "記録済み　") + rows.length + " 行（" + sec.toFixed(1) + " 秒）";
+  }
+
+  function setExportEnabled(on) {
+    ui.share.disabled = ui.download.disabled = ui.copy.disabled = !on;
+  }
+
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function clock(d) { return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()); }
+  function baseName() {
+    if (importedName) return importedName.replace(/\.[^.]*$/, "");
+    const d = recStartWall || new Date();
+    return "encoder_" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "_" +
+      pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  }
+  function csvText() {
+    return header.join(",") + "\n" + rows.map((r) => r.map((v) => (v === null || v === undefined ? "" : v)).join(",")).join("\n") + "\n";
+  }
+  function format() {
+    const r = document.querySelector('input[name="fmt"]:checked');
+    return r ? r.value : "xlsx";
+  }
+
+  // 選んだ形式のファイルを作る（共有はボタンを押した直後でないと使えないので、ここは待たずに作る）
+  function makeFile() {
+    if (format() === "xlsx") {
+      const extra = (!importedName && paramLog.length)
+        ? [{ name: "パラメータ", header: ["rx_ms", "キー", "項目", "値", "メモ"], rows: paramLog }] : [];
+      const data = X.build({ header, rows, date: recStartWall || new Date(), extra });
+      return new File([data], baseName() + ".xlsx", { type: X.MIME });
+    }
+    return new File([csvText()], baseName() + ".csv", { type: "text/csv" });
+  }
+
+  async function shareOut() {
+    let file;
+    try { file = makeFile(); } catch (e) { alert("ファイルを作れませんでした: " + errText(e)); return; }
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: file.name });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;   // 共有画面を閉じただけ
+    }
+    alert("このブラウザでは共有が使えません。「ダウンロード」を使ってください。");
+  }
+
+  function downloadOut() {
+    let file;
+    try { file = makeFile(); } catch (e) { alert("ファイルを作れませんでした: " + errText(e)); return; }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url; a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  async function copyCsv() {
+    const text = csvText();
+    ui.csvBox.value = text;
+    ui.csvBox.classList.remove("hidden");
+    try {
+      await navigator.clipboard.writeText(text);
+      alert(rows.length + " 行をコピーしました。メモやメールに貼り付けてください。");
+    } catch (_) {
+      ui.csvBox.focus(); ui.csvBox.select();
+      alert("下の枠の文字を長押しして「すべてを選択」→「コピー」してください。");
+    }
+  }
+
+  // ---------- CSV の読み込み ----------
+  function loadTable(t, name) {
+    if (!X.seriesCols(t.header).length) throw new Error("totalL・totalR・dL・dR の列が見つかりません（見出し: " + t.header.join(",") + "）");
+    if (rows.length && !importedName &&
+        !confirm("今の記録（" + rows.length + " 行）の代わりに、読み込んだ CSV（" + t.rows.length + " 行）を保存の対象にしますか？\n（今の記録はこの端末に残っているので、ページを開き直すと戻ります）")) return false;
+    header = t.header; rows = t.rows; importedName = name || "imported.csv"; recStartWall = null;
+    const x = document.querySelector('input[name="fmt"][value="xlsx"]');
+    if (x) x.checked = true;
+    setExportEnabled(true);
+    updateRecInfo();
+    return true;
+  }
+
+  async function importCsv() {
+    const f = ui.file.files && ui.file.files[0];
+    ui.file.value = "";
+    if (!f) return;
+    if (recording) { alert("記録中は読み込めません。先に「記録停止」を押してください。"); return; }
+    try { loadTable(X.parseCsv(await f.text()), f.name); }
+    catch (e) { alert("CSV を読めませんでした: " + errText(e)); }
+  }
+
+  // ---------- 端末内の保存（ページを閉じても最後の記録が残る） ----------
+  function saveLocal() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ start: recStartWall ? recStartWall.toISOString() : null, rows, paramLog }));
+    } catch (_) {}
+  }
+  function loadLocal() {
+    try {
+      const s = localStorage.getItem(STORE_KEY);
+      if (!s) return;
+      const o = JSON.parse(s);
+      if (o && Array.isArray(o.rows) && o.rows.length) {
+        rows = o.rows; recStartWall = o.start ? new Date(o.start) : null;
+        paramLog = Array.isArray(o.paramLog) ? o.paramLog : [];
+        setExportEnabled(true);
+        updateRecInfo();
+        ui.recInfo.textContent += "（前回の記録）";
+      }
+    } catch (_) {}
+  }
+  setInterval(() => { if (recording) saveLocal(); }, 3000);
+
+  // ---------- グラフ ----------
+  let plotPending = false;
+  function schedulePlot() {
+    if (plotPending) return;
+    plotPending = true;
+    requestAnimationFrame(() => { plotPending = false; drawPlot(); });
+  }
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function drawPlot() {
+    const cv = ui.plot, dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    const g = cv.getContext("2d");
+    if (!g) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    let m = 50;
+    for (const p of live) m = Math.max(m, Math.abs(p.vL), Math.abs(p.vR));
+    m = Math.ceil(m / 50) * 50;
+    const y = (v) => h / 2 - (v / m) * (h / 2 - 12);
+    const now = live.length ? live[live.length - 1].t : 0;
+    const x = (t) => w - ((now - t) / (PLOT_SEC * 1000)) * w;
+    g.strokeStyle = cssVar("--grid"); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w, y(0)); g.stroke();
+    g.fillStyle = cssVar("--muted"); g.font = "11px sans-serif";
+    g.fillText("+" + m, 4, 12); g.fillText("-" + m, 4, h - 4); g.fillText("0", 4, y(0) - 3);
+    for (const [key, col] of [["vL", "--l"], ["vR", "--r"]]) {
+      g.strokeStyle = cssVar(col); g.lineWidth = 2; g.beginPath();
+      live.forEach((p, i) => { const px = x(p.t), py = y(p[key]); i ? g.lineTo(px, py) : g.moveTo(px, py); });
+      g.stroke();
+    }
+  }
+  window.addEventListener("resize", schedulePlot);
+
+  // ---------- パラメータ（Bluetooth でロボットへ送る） ----------
+  // ロボットとのやりとり（1 行ずつ、改行で終わる）
+  //   ページ → ロボット: "@BKP=96"（変える）、"@?"（全部読む）、"@DEF"（初期値に戻す）
+  //   ロボット → ページ: "#P BKP=96.00"（受け取った値）、"#E 理由"（エラー）
+  // 初期値・範囲はロボット側（app_param.c）と同じにしておく
+  const PARAMS = [
+    { group: "倒立・速度（公式の制御）" },
+    { key: "BKP", label: "倒立 Kp", def: 96, step: 1, min: 0, max: 288 },
+    { key: "BKD", label: "倒立 Kd", def: 0.48, step: 0.02, min: 0, max: 2 },
+    { key: "VKP", label: "速度 Kp", def: 62, step: 1, min: 0, max: 72 },
+    { key: "VKI", label: "速度 Ki", def: 0.31, step: 0.01, min: 0, max: 0.5 },
+    { key: "MID", label: "機械的中央値 [°]", def: 0, step: 0.1, min: -10, max: 10 },
+    { group: "円軌道" },
+    { key: "SPD", label: "前進の速さ [m/s]", def: 0.10, step: 0.01, min: 0, max: 0.3 },
+    { key: "RAD", label: "半径 [m]（＋左回り、0 直進）", def: 0.5, step: 0.05, min: -2, max: 2 },
+    { key: "YKP", label: "旋回 Kp", def: 3.3, step: 0.1, min: 0, max: 20 },
+    { key: "YKI", label: "旋回 Ki", def: 10, step: 1, min: 0, max: 60 },
+  ].map((p) => (p.key ? { ...p, dec: Math.max(0, (String(p.step).split(".")[1] || "").length) } : p));
+  const PKEYS = PARAMS.filter((p) => p.key);
+  const PARAM_STORE = "encoder_logger_params";
+  const enc = new TextEncoder();
+  let want = {};                 // ページで決めた値（端末に保存）
+  let robotVal = {};             // ロボットが受け取ったと返してきた値
+  let pending = {};              // 送って返事を待っている { key: 送った時刻 }
+  let paramLog = [];             // 記録中に変わったパラメータ [rx_ms, key, label, value, memo]
+  let sendTimers = {};
+  let writeChain = Promise.resolve();
+
+  function setParamStatus(text, cls) { ui.pStatus.textContent = text; ui.pStatus.className = "hint" + (cls ? " " + cls : ""); }
+  function setParamButtons(on) { ui.pRead.disabled = ui.pSendAll.disabled = ui.pDefault.disabled = !on; }
+  function connected() { return !!(chr && device && device.gatt && device.gatt.connected); }
+  const fmtVal = (p, v) => Number(v).toFixed(p.dec);
+  const clampVal = (p, v) => Math.min(p.max, Math.max(p.min, v));
+
+  function loadWant() {
+    try { const o = JSON.parse(localStorage.getItem(PARAM_STORE) || "{}"); if (o && typeof o === "object") want = o; } catch (_) {}
+    for (const p of PKEYS) if (!Number.isFinite(want[p.key])) want[p.key] = p.def;
+  }
+  function saveWant() { try { localStorage.setItem(PARAM_STORE, JSON.stringify(want)); } catch (_) {} }
+
+  function buildParamList() {
+    const html = [];
+    for (const p of PARAMS) {
+      if (p.group) { html.push('<div class="pgroup">' + p.group + "</div>"); continue; }
+      html.push('<div class="prow"><div class="pname"><div>' + p.label + '</div><div class="probot" id="pr_' + p.key + '">ロボット –</div></div>' +
+        '<button class="pbtn" data-k="' + p.key + '" data-d="-1" aria-label="' + p.label + 'を下げる">−</button>' +
+        '<input class="pin" id="pi_' + p.key + '" data-k="' + p.key + '" type="text" inputmode="decimal" enterkeyhint="send" autocomplete="off" aria-label="' + p.label + '">' +
+        '<button class="pbtn" data-k="' + p.key + '" data-d="1" aria-label="' + p.label + 'を上げる">＋</button></div>');
+    }
+    ui.paramList.innerHTML = html.join("");
+    for (const p of PKEYS) { $("pi_" + p.key).value = fmtVal(p, want[p.key]); showRobot(p); }
+    ui.paramList.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button.pbtn");
+      if (!b) return;
+      const p = PKEYS.find((q) => q.key === b.dataset.k);
+      setWant(p, Number(fmtVal(p, want[p.key] + Number(b.dataset.d) * p.step)), 300);
+    });
+    ui.paramList.addEventListener("change", (ev) => {
+      const inp = ev.target.closest("input.pin");
+      if (!inp) return;
+      const p = PKEYS.find((q) => q.key === inp.dataset.k);
+      const v = Number(inp.value.replace(/[^\d.+-]/g, ""));
+      if (inp.value.trim() === "" || !Number.isFinite(v)) { inp.value = fmtVal(p, want[p.key]); return; }
+      setWant(p, v, 0);
+    });
+    ui.paramList.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && ev.target.matches("input.pin")) ev.target.blur();
+    });
+  }
+
+  // 値を変える → 入力欄に出す → 少し待ってから送る（−・＋ を続けて押したときは最後の値だけ送る）
+  function setWant(p, v, delay) {
+    v = clampVal(p, v);
+    want[p.key] = v;
+    $("pi_" + p.key).value = fmtVal(p, v);
+    saveWant();
+    showRobot(p);
+    clearTimeout(sendTimers[p.key]);
+    sendTimers[p.key] = setTimeout(() => sendParam(p), delay);
+  }
+
+  function sendParam(p) {
+    if (!connected()) { setParamStatus("未接続です。値はこの端末に残しておき、接続後に「全部送る」で送れます。", "warn"); return; }
+    pending[p.key] = Date.now();
+    showRobot(p);
+    sendCmd("@" + p.key + "=" + fmtVal(p, want[p.key]));
+    setTimeout(() => checkPending(p), 2500);
+  }
+
+  function checkPending(p) {
+    if (pending[p.key] && Date.now() - pending[p.key] >= 2400) {
+      delete pending[p.key];
+      showRobot(p, "応答なし");
+      setParamStatus("ロボットから返事がありません。パラメータ受信に対応したプログラムを書き込んであるか確認してください。", "err");
+    }
+  }
+
+  function showRobot(p, note) {
+    const el = $("pr_" + p.key);
+    if (!el) return;
+    const r = robotVal[p.key];
+    if (note) { el.textContent = "ロボット " + note; el.className = "probot err"; return; }
+    if (pending[p.key]) { el.textContent = "ロボット 送信中…"; el.className = "probot"; return; }
+    if (r === undefined) { el.textContent = "ロボット –"; el.className = "probot"; return; }
+    const same = Math.abs(r - want[p.key]) < p.step / 2;
+    el.textContent = "ロボット " + fmtVal(p, r) + (same ? "" : "（ページと違う）");
+    el.className = "probot " + (same ? "same" : "diff");
+  }
+
+  // BLE の 1 回の書き込みは 20 バイトまでなので分けて送る。送る順番が入れ替わらないように 1 つずつ待つ
+  function sendCmd(text) {
+    if (!connected()) return false;
+    const bytes = enc.encode(text + "\n");
+    writeChain = writeChain.then(async () => {
+      for (let i = 0; i < bytes.length; i += 20) {
+        const part = bytes.slice(i, i + 20);
+        if (chr.properties && chr.properties.writeWithoutResponse && chr.writeValueWithoutResponse) await chr.writeValueWithoutResponse(part);
+        else await chr.writeValue(part);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }).catch((e) => setParamStatus("送れませんでした: " + errText(e), "err"));
+    return true;
+  }
+
+  let lastParamRx = 0;
+  function readParams() {
+    if (!sendCmd("@?")) return;
+    const asked = Date.now();
+    setParamStatus("ロボットの値を読んでいます…");
+    setTimeout(() => {
+      if (lastParamRx < asked) setParamStatus("ロボットから返事がありません。パラメータ受信に対応したプログラムを書き込んであるか確認してください。", "err");
+    }, 3000);
+  }
+  function sendAll() {
+    for (const p of PKEYS) { clearTimeout(sendTimers[p.key]); sendParam(p); }
+    setParamStatus("全部の値を送りました。");
+  }
+  function sendDefault() {
+    if (!confirm("ロボットとページの値を、すべて初期値に戻しますか？")) return;
+    for (const p of PKEYS) { want[p.key] = p.def; $("pi_" + p.key).value = fmtVal(p, p.def); }
+    saveWant();
+    for (const p of PKEYS) { pending[p.key] = Date.now(); showRobot(p); setTimeout(() => checkPending(p), 2500); }
+    sendCmd("@DEF");
+    setParamStatus("初期値に戻しています…");
+  }
+
+  // ロボットからの返事 "#P KEY=値" / "#E 理由"
+  function handleParamReply(line) {
+    if (line.startsWith("#E")) { setParamStatus("ロボット: " + line.slice(2).trim(), "err"); return; }
+    const m = /^#P\s+([A-Za-z]+)\s*=\s*([-+]?\d*\.?\d+)/.exec(line);
+    if (!m) return;
+    const p = PKEYS.find((q) => q.key === m[1].toUpperCase());
+    if (!p) return;
+    const v = Number(m[2]);
+    lastParamRx = Date.now();
+    const changed = robotVal[p.key] === undefined || Math.abs(robotVal[p.key] - v) > 1e-9;
+    robotVal[p.key] = v;
+    delete pending[p.key];
+    showRobot(p);
+    setParamStatus("ロボットの値を受け取りました（" + clock(new Date()) + "）。", "on");
+    if (recording && changed) {
+      paramLog.push([Math.round(performance.now() - recStartPerf), p.key, p.label, v, "変更"]);
+    }
+  }
+
+  // ---------- ボタン ----------
+  ui.pRead.addEventListener("click", readParams);
+  ui.pSendAll.addEventListener("click", sendAll);
+  ui.pDefault.addEventListener("click", sendDefault);
+  ui.connect.addEventListener("click", connect);
+  ui.reconnect.addEventListener("click", reconnect);
+  ui.disconnect.addEventListener("click", disconnect);
+  ui.zero.addEventListener("click", resetTotals);
+  ui.rec.addEventListener("click", toggleRec);
+  ui.share.addEventListener("click", shareOut);
+  ui.download.addEventListener("click", downloadOut);
+  ui.copy.addEventListener("click", copyCsv);
+  ui.file.addEventListener("change", importCsv);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && wakeLock === null) keepAwake(); });
+
+  loadWant();
+  buildParamList();
+  loadLocal();
+  drawPlot();
+  if (!navigator.bluetooth) setStatus("このブラウザは Web Bluetooth に対応していません。iPhone では Bluefy で開いてください。", "warn");
+
+  // テスト用（受信処理だけを外から呼べるようにする）
+  window.__encoderLogger = {
+    onNotify, parseLine, csvText: () => csvText(), toggleRec, rows: () => rows, header: () => header,
+    resetTotals, loadTable, makeFile, handleLine, paramLog: () => paramLog, robotVal: () => robotVal, want: () => want,
+    _link: (d, c) => { device = d; chr = c; setParamButtons(true); },
+  };
+})();
+</script>
+</body>
+</html>
